@@ -339,75 +339,28 @@ vultr_server:
       sample: 1
 '''
 
-import time
-import base64
 from ansible.module_utils.basic import AnsibleModule
-from ansible.module_utils._text import to_text, to_bytes
 from ..module_utils.vultr import (
-    Vultr,
     vultr_argument_spec,
 )
+from ..module_utils.common_server import AnsibleVultrAbstractServer
 
 
-class AnsibleVultrServer(Vultr):
+class AnsibleVultrServer(AnsibleVultrAbstractServer):
+    module_name = "vultr_server"
+    base_api_path = "/v1/server"
 
     def __init__(self, module):
-        super(AnsibleVultrServer, self).__init__(module, "vultr_server")
+        super(AnsibleVultrServer, self).__init__(module, self.module_name)
 
-        self.server = None
-        self.returns = {
-            'SUBID': dict(key='id'),
-            'label': dict(key='name'),
-            'date_created': dict(),
-            'allowed_bandwidth_gb': dict(convert_to='int'),
+        self.returns.update({
             'auto_backups': dict(key='auto_backup_enabled', convert_to='bool'),
-            'current_bandwidth_gb': dict(),
             'kvm_url': dict(),
-            'default_password': dict(),
-            'internal_ip': dict(),
-            'disk': dict(),
-            'cost_per_month': dict(convert_to='float'),
-            'location': dict(key='region'),
-            'main_ip': dict(key='v4_main_ip'),
-            'network_v4': dict(key='v4_network'),
-            'gateway_v4': dict(key='v4_gateway'),
-            'os': dict(),
-            'pending_charges': dict(convert_to='float'),
             'power_status': dict(),
-            'ram': dict(),
-            'plan': dict(),
             'server_state': dict(),
-            'status': dict(),
             'firewall_group': dict(),
-            'tag': dict(),
-            'v6_main_ip': dict(),
-            'v6_network': dict(),
-            'v6_network_size': dict(),
-            'v6_networks': dict(),
             'vcpu_count': dict(convert_to='int'),
-        }
-        self.server_power_state = None
-
-    def get_startup_script(self):
-        return self.query_resource_by_key(
-            key='name',
-            value=self.module.params.get('startup_script'),
-            resource='startupscript',
-        )
-
-    def get_os(self):
-        if self.module.params.get('snapshot'):
-            os_name = 'Snapshot'
-        else:
-            os_name = self.module.params.get('os')
-
-        return self.query_resource_by_key(
-            key='name',
-            value=os_name,
-            resource='os',
-            use_cache=True,
-            id_key='OSID',
-        )
+        })
 
     def get_snapshot(self):
         return self.query_resource_by_key(
@@ -415,33 +368,6 @@ class AnsibleVultrServer(Vultr):
             value=self.module.params.get('snapshot'),
             resource='snapshot',
             id_key='SNAPSHOTID',
-        )
-
-    def get_ssh_keys(self):
-        ssh_key_names = self.module.params.get('ssh_keys')
-        if not ssh_key_names:
-            return []
-
-        ssh_keys = []
-        for ssh_key_name in ssh_key_names:
-            ssh_key = self.query_resource_by_key(
-                key='name',
-                value=ssh_key_name,
-                resource='sshkey',
-                use_cache=True,
-                id_key='SSHKEYID',
-            )
-            if ssh_key:
-                ssh_keys.append(ssh_key)
-        return ssh_keys
-
-    def get_region(self):
-        return self.query_resource_by_key(
-            key='name',
-            value=self.module.params.get('region'),
-            resource='regions',
-            use_cache=True,
-            id_key='DCID',
         )
 
     def get_firewall_group(self):
@@ -453,23 +379,10 @@ class AnsibleVultrServer(Vultr):
             id_key='FIREWALLGROUPID'
         )
 
-    def get_user_data(self):
-        user_data = self.module.params.get('user_data')
-        if user_data is not None:
-            user_data = to_text(base64.b64encode(to_bytes(user_data)))
-        return user_data
-
-    def get_server_user_data(self, server):
-        if not server or not server.get('SUBID'):
-            return None
-
-        user_data = self.api_query(path="/v1/server/get_user_data?SUBID=%s" % server.get('SUBID'))
-        return user_data.get('userdata')
-
     def get_server(self, refresh=False):
         if self.server is None or refresh:
             self.server = None
-            server_list = self.api_query(path="/v1/server/list")
+            server_list = self.api_query(path="%s/list" % self.base_api_path)
             if server_list:
                 for server_id, server_data in server_list.items():
                     if server_data.get('label') == self.module.params.get('name'):
@@ -501,14 +414,6 @@ class AnsibleVultrServer(Vultr):
                         )
                         self.server['firewall_group'] = fw.get('description')
         return self.server
-
-    def present_server(self, start_server=True):
-        server = self.get_server()
-        if not server:
-            server = self._create_server(server=server)
-        else:
-            server = self._update_server(server=server, start_server=start_server)
-        return server
 
     def _create_server(self, server=None):
         required_params = [
@@ -544,7 +449,7 @@ class AnsibleVultrServer(Vultr):
                 'SCRIPTID': self.get_startup_script().get('SCRIPTID'),
             }
             self.api_query(
-                path="/v1/server/create",
+                path="%s/create" % self.base_api_path,
                 method="POST",
                 data=data
             )
@@ -570,7 +475,7 @@ class AnsibleVultrServer(Vultr):
                             'SUBID': server['SUBID']
                         }
                         self.api_query(
-                            path="/v1/server/backup_%s" % auto_backup_enabled_changed,
+                            path="%s/backup_%s" % (self.base_api_path, auto_backup_enabled_changed),
                             method="POST",
                             data=data
                         )
@@ -594,7 +499,7 @@ class AnsibleVultrServer(Vultr):
                             'SUBID': server['SUBID']
                         }
                         self.api_query(
-                            path="/v1/server/ipv6_%s" % ipv6_enabled_changed,
+                            path="%s/ipv6_%s" % (self.base_api_path, ipv6_enabled_changed),
                             method="POST",
                             data=data
                         )
@@ -618,7 +523,7 @@ class AnsibleVultrServer(Vultr):
                             'SUBID': server['SUBID']
                         }
                         self.api_query(
-                            path="/v1/server/private_network_%s" % private_network_enabled_changed,
+                            path="%s/private_network_%s" % (self.base_api_path, private_network_enabled_changed),
                             method="POST",
                             data=data
                         )
@@ -649,7 +554,7 @@ class AnsibleVultrServer(Vultr):
                         'VPSPLANID': plan['VPSPLANID'],
                     }
                     self.api_query(
-                        path="/v1/server/upgrade_plan",
+                        path="%s/upgrade_plan" % self.base_api_path,
                         method="POST",
                         data=data
                     )
@@ -711,7 +616,7 @@ class AnsibleVultrServer(Vultr):
                     'userdata': user_data,
                 }
                 self.api_query(
-                    path="/v1/server/set_user_data",
+                    path="%s/set_user_data" % self.base_api_path,
                     method="POST",
                     data=data
                 )
@@ -729,7 +634,7 @@ class AnsibleVultrServer(Vultr):
                     'tag': tag,
                 }
                 self.api_query(
-                    path="/v1/server/tag_set",
+                    path="%s/tag_set" % self.base_api_path,
                     method="POST",
                     data=data
                 )
@@ -747,7 +652,7 @@ class AnsibleVultrServer(Vultr):
                     'FIREWALLGROUPID': firewall_group.get('FIREWALLGROUPID'),
                 }
                 self.api_query(
-                    path="/v1/server/firewall_group_set",
+                    path="%s/firewall_group_set" % self.base_api_path,
                     method="POST",
                     data=data
                 )
@@ -759,30 +664,6 @@ class AnsibleVultrServer(Vultr):
         server = self._wait_for_state(key='status', state='active')
         return server
 
-    def absent_server(self):
-        server = self.get_server()
-        if server:
-            self.result['changed'] = True
-            self.result['diff']['before']['id'] = server['SUBID']
-            self.result['diff']['after']['id'] = ""
-            if not self.module.check_mode:
-                data = {
-                    'SUBID': server['SUBID']
-                }
-                self.api_query(
-                    path="/v1/server/destroy",
-                    method="POST",
-                    data=data
-                )
-                for s in range(0, 60):
-                    if server is not None:
-                        break
-                    time.sleep(2)
-                    server = self.get_server(refresh=True)
-                else:
-                    self.fail_json(msg="Wait for server '%s' to get deleted timed out" % server['label'])
-        return server
-
     def restart_server(self):
         self.result['changed'] = True
         server = self.get_server()
@@ -792,7 +673,7 @@ class AnsibleVultrServer(Vultr):
                     'SUBID': server['SUBID']
                 }
                 self.api_query(
-                    path="/v1/server/reboot",
+                    path="%s/reboot" % self.base_api_path,
                     method="POST",
                     data=data
                 )
@@ -808,7 +689,7 @@ class AnsibleVultrServer(Vultr):
                     'SUBID': server['SUBID']
                 }
                 self.api_query(
-                    path="/v1/server/reinstall",
+                    path="%s/reinstall" % self.base_api_path,
                     method="POST",
                     data=data
                 )
@@ -816,25 +697,9 @@ class AnsibleVultrServer(Vultr):
         return server
 
     def _wait_for_state(self, key='power_status', state=None, timeout=60):
-        time.sleep(1)
-        server = self.get_server(refresh=True)
-        for s in range(0, timeout):
-            # Check for Truely if wanted state is None
-            if state is None and server.get(key):
-                break
-            elif server.get(key) == state:
-                break
-            time.sleep(2)
-            server = self.get_server(refresh=True)
-
-        # Timed out
-        else:
-            if state is None:
-                msg = "Wait for '%s' timed out" % key
-            else:
-                msg = "Wait for '%s' to get into state '%s' timed out" % (key, state)
-            self.fail_json(msg=msg)
-        return server
+        return super(AnsibleVultrServer, self)._wait_for_state(
+            key=key, state=state, timeout=timeout
+        )
 
     def start_server(self, skip_results=False):
         server = self.get_server()
@@ -852,7 +717,7 @@ class AnsibleVultrServer(Vultr):
                         'SUBID': server['SUBID']
                     }
                     self.api_query(
-                        path="/v1/server/start",
+                        path="%s/start" % self.base_api_path,
                         method="POST",
                         data=data
                     )
@@ -871,7 +736,7 @@ class AnsibleVultrServer(Vultr):
                     'SUBID': server['SUBID'],
                 }
                 self.api_query(
-                    path="/v1/server/halt",
+                    path="%s/halt" % self.base_api_path,
                     method="POST",
                     data=data
                 )
